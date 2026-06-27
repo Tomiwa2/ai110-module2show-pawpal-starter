@@ -4,6 +4,7 @@ classDiagram
         +List~Pet~ pets
         +add_pet(pet) void
         +get_pets() List~Pet~
+        +get_all_tasks() List~Task~
     }
 
     class Pet {
@@ -17,18 +18,29 @@ classDiagram
     class Task {
         +string name
         +int duration
-        +string priority
+        +Priority priority
+        +Pet pet
         +update_details(name, duration, priority) void
         +display_info() void
+    }
+
+    class Priority {
+        <<enumeration>>
+        HIGH
+        MEDIUM
+        LOW
     }
 
     class Scheduler {
         +List~Task~ tasks_to_schedule
         +int available_time
+        +from_owner(owner, available_time) Scheduler
         +sort_tasks() List~Task~
         +generate_plan() List~Task~
     }
 
     Owner "1" o-- "*" Pet : owns
     Pet "1" o-- "*" Task : has
+    Task "*" --> "1" Pet : belongs to
+    Task "*" --> "1" Priority : has
     Scheduler "1" o-- "*" Task : schedules
