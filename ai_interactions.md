@@ -30,7 +30,8 @@ Files modified:
   method (a sorted sweep-line over booked intervals, clipped to a working window).
 - **`tests/test_pawpal.py`** — added 6 tests covering an empty day, a fittable
   gap, a too-small gap, a full day (returns `None`), ignoring completed/
-  unscheduled tasks, and date-awareness. Suite went from 10 → 16 passing tests.
+  unscheduled tasks, and date-awareness. Suite went from 10 → 16 passing tests
+  (and has since grown to 19 with the persistence round-trip tests).
 - **`main.py`** — added a "Next available slot" step to the CLI demo that suggests
   the earliest free 45-minute slot for today.
 - **`app.py`** — added a "🔎 Find next free slot" button to the Streamlit Add-a-Task
@@ -40,8 +41,9 @@ Files modified:
   paragraph, the updated sample test output (16 passing), and the CLI demo output.
 - **`diagrams/uml_final.mmd`** — added the new method to the `Scheduler` class box.
 
-The agent ran `pytest` (16 passed), executed `python main.py` to confirm the slot
-output (`08:25`), and byte-compiled `app.py`/`main.py`/`pawpal_system.py`.
+The agent ran `pytest` (16 passing at the time; 19 now), executed `python main.py`
+to confirm the slot output (`08:25`), and byte-compiled
+`app.py`/`main.py`/`pawpal_system.py`.
 
 **What did you have to verify or fix manually?**
 
@@ -176,7 +178,14 @@ def auto_reschedule(self) -> list[str]:
 | `main.py` day, 4 conflicts | 3 moves → **0 conflicts** | same 3 moves → **0 conflicts** |
 | Packed day, 1 low-pri task can't fit | **bails on first failure → 2 conflicts left** | unschedules the clashers → **0 conflicts** |
 
-**Which approach did you use in your final implementation and why?**
+**Which approach would you adopt, and why?**
+
+> **Scope note:** this comparison is an exploration of how two models tackle one
+> hard algorithm — `auto_reschedule()` is **not** wired into the shipped
+> `Scheduler` (the core project doesn't require auto-resolution; it *reports*
+> conflicts via `conflict_warnings()`). The code below is the version I'd adopt
+> if I added the feature, and it was run against the real `pawpal_system.py`
+> classes to verify the results in the table above.
 
 Neither verbatim — a **hybrid**, because each model contributed a piece the other
 got wrong:
