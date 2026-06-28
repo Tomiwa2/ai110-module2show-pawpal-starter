@@ -6,6 +6,7 @@ Run with:  python main.py
 from datetime import date
 
 from pawpal_system import Owner, Pet, Task, Scheduler, Priority
+from formatting import format_task_line, tasks_table
 
 
 def main() -> None:
@@ -41,32 +42,37 @@ def main() -> None:
     scheduler = Scheduler.from_owner(owner)
 
     # Show the unsorted order first, to make the sort visible.
-    print("--- Tasks as entered (out of order) ---")
-    for task in scheduler.tasks_to_schedule:
-        task.display_info()
+    print("🐾 --- Tasks as entered (out of order) ---")
+    print(tasks_table(scheduler.tasks_to_schedule))
 
     # 5. Sort and print "Today's Schedule" (pending tasks, in time order).
     plan = scheduler.generate_plan()
-    print(f"\n=== Today's Schedule for {owner.name} ===")
-    for task in plan:
-        task.display_info()
+    print(f"\n📅 === Today's Schedule for {owner.name} ===")
+    print(tasks_table(plan))
+
+    # 5b. Same pending tasks, re-sorted PRIORITY-FIRST. Note how the 14:00 high-
+    #     priority "Litter change" now jumps ahead of the 08:15 medium "Feed":
+    #     priority wins, and start time only breaks ties within a priority band.
+    priority_plan = scheduler.generate_plan(by_priority=True)
+    print(f"\n⭐ === Priority-First Schedule for {owner.name} ===")
+    print(tasks_table(priority_plan))
 
     # 6. Demonstrate the filtering methods on the now-sorted task list.
-    print("\n--- Filter: only Rex's tasks ---")
+    print("\n🔎 --- Filter: only Rex's tasks ---")
     for task in scheduler.filter_tasks(pet_name="Rex"):
-        task.display_info()
+        print(format_task_line(task))
 
-    print("\n--- Filter: completed tasks ---")
+    print("\n🔎 --- Filter: completed tasks ---")
     for task in scheduler.filter_tasks(completed=True):
-        task.display_info()
+        print(format_task_line(task))
 
-    print("\n--- Filter: pending tasks ---")
+    print("\n🔎 --- Filter: pending tasks ---")
     for task in scheduler.filter_tasks(completed=False):
-        task.display_info()
+        print(format_task_line(task))
 
     # 6b. Complete a recurring task and watch the next occurrence appear.
     walk = next(t for t in scheduler.tasks_to_schedule if t.name == "Morning walk")
-    print(f"\n--- Completing '{walk.name}' (daily) ---")
+    print(f"\n🔁 --- Completing '{walk.name}' (daily) ---")
     next_walk = walk.mark_complete()  # attaches the next occurrence to the pet
     print(f"Auto-created next occurrence due: {next_walk.due_date.isoformat()}")
 
@@ -75,11 +81,11 @@ def main() -> None:
     scheduler.sort_tasks()
     print("Rex's tasks now (note the new pending walk for tomorrow):")
     for task in scheduler.filter_tasks(pet_name="Rex"):
-        task.display_info()
+        print(format_task_line(task))
 
     # 7. Flag any overlapping tasks (the owner can't be in two places at once).
     #    conflict_warnings() never raises -- it just returns printable strings.
-    print("\n--- Conflict check ---")
+    print("\n⚠️  --- Conflict check ---")
     warnings = scheduler.conflict_warnings()
     if warnings:
         for message in warnings:
@@ -89,7 +95,7 @@ def main() -> None:
 
     # 8. Suggest the earliest free slot for a new task, working around the
     #    already-booked times for today.
-    print("\n--- Next available slot ---")
+    print("\n🕒 --- Next available slot ---")
     new_duration = 45
     slot = scheduler.find_next_available_slot(new_duration, on_date=today)
     if slot is not None:

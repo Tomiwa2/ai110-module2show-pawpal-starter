@@ -73,15 +73,144 @@ byte-compile cleanly.
 
 > Compare two different prompts (or two different models) on the same task.
 
+**The task (complex algorithm):** *auto-rescheduling conflicting tasks.* When
+two of the owner's tasks overlap in time, the scheduler should automatically
+shift the **lower-priority** task to the earliest free slot so the day ends up
+conflict-free — without moving the more important task. This is genuinely
+algorithmic: it has to pick a "loser" deterministically, search for a new slot,
+and iterate to a **fixed point** (rescheduling one task can create or clear other
+conflicts) while guaranteeing it always terminates.
+
+**The shared prompt** (pasted verbatim into both models):
+
+> In a Python pet-care scheduler, `Scheduler` has a method
+> `detect_conflicts() -> list[tuple[Task, Task]]` that returns pairs of
+> overlapping tasks, and `find_next_available_slot(duration, day_start, day_end, on_date)`
+> that returns the earliest free `"HH:MM"` start time (or `None`). Each `Task`
+> has `.priority` (a `Priority` IntEnum where `HIGH=0 < MEDIUM=1 < LOW=2`),
+> `.start_time` (`"HH:MM"` or `None`), `.duration` (minutes), and `.due_date`.
+> Write a `Scheduler.auto_reschedule()` method that resolves all conflicts by
+> moving the lower-priority task of each conflicting pair to its next free slot.
+> It must terminate, and it must not move the higher-priority task. Return a log
+> of the moves it made.
+
 | | Option A | Option B |
 |-|----------|----------|
-| **Model / tool used** | | |
-| **Prompt** | | |
-| **Response summary** | | |
-| **What was useful** | | |
-| **Problems noticed** | | |
-| **Decision** | | |
+| **Model / tool used** | **Claude (Opus 4.8)** via Claude Code | **Google Gemini** |
+| **Prompt** | The shared prompt above | The same shared prompt above |
+| **Response summary** | A greedy fixed-point loop: each pass takes the first conflict, picks the **loser** with `max(key=(priority, start_minutes, duration))` (least important → latest → longest), nulls its `start_time` so it can't block its own search, calls `find_next_available_slot()`, and reassigns it. Loops (capped at `max_passes`) until `detect_conflicts()` is empty or no move is possible. Returns `(task, old_time, new_time)` tuples. | The **same** greedy fixed-point loop and the same loser-selection idea (lower priority, tie-break by later start). The key difference is the failure path: when no slot fits, Gemini **unschedules** the loser (`start_time = None`) and keeps going, instead of stopping. Returns a list of pre-formatted human-readable log strings. |
+| **What was useful** | Reused the **existing** `detect_conflicts()` / `find_next_available_slot()` instead of re-deriving interval math; explicit, deterministic loser-selection tie-breaks; a `max_passes` cap and a "no-move-possible → break" guard make **termination provable**; date-aware via `on_date=loser.due_date`. | Same good API reuse and `max_iterations` safety bound. Its standout idea is **unschedule-instead-of-give-up**: an untimed task can't conflict, so this both guarantees termination *and* clears **every** conflict — more complete than Claude's early `break`. The string log is instantly printable. |
+| **Problems noticed** | Greedy/first-conflict order isn't globally optimal — it minimizes moves locally, not total displacement; it mutates `Task.start_time` in place (no dry-run/undo); **bails on the first unplaceable task**, leaving later conflicts unresolved (see the packed-day test). | Does **not** null the loser before searching, so the task counts itself as booked and can be pushed later than necessary (latent suboptimality — didn't bite the tested cases). **Silently drops** a task's time on failure with no warning emphasis. The comment `# Assuming setter handles start_minutes sync` shows it **guessed** the API rather than checking (the guess is right — `start_minutes` is a computed property). |
+| **Decision** | Verified: on the `main.py` scenario, 3 moves (`Feed 08:15→08:30`, `Vet visit 14:00→08:40`, `Play fetch 14:00→09:40`) → **0 conflicts**. But on a packed day it **bailed** and left 2 conflicts unresolved. | Verified: **identical** 3 moves and 0 conflicts on the normal case. On the packed day it **cleared all conflicts** by unscheduling the 2 low-priority clashers where Claude bailed. ✅ **Better termination behavior.** |
+
+### Claude's solution (Option A) — verified working
+
+```python
+def auto_reschedule(self, day_start="08:00", day_end="20:00", max_passes=50):
+    """Greedily shift the lower-priority task of each conflict into a free slot.
+
+    Each pass resolves one conflict and re-checks, so rescheduling that creates
+    a new conflict is caught on the next pass. Always terminates: it stops when
+    the day is conflict-free, when a task simply can't be placed, or after
+    `max_passes`. Returns a list of (task, old_time, new_time) moves.
+    """
+    moves = []
+    for _ in range(max_passes):
+        conflicts = self.detect_conflicts()
+        if not conflicts:
+            break
+        a, b = conflicts[0]
+        # Loser = least important: higher priority int, then later start, then longer.
+        loser = max((a, b), key=lambda t: (t.priority, t.start_minutes, t.duration))
+        original = loser.start_time
+        loser.start_time = None  # don't let it block its own slot search
+        slot = self.find_next_available_slot(
+            loser.duration, day_start, day_end, on_date=loser.due_date
+        )
+        if slot is None or slot == original:
+            loser.start_time = original  # nowhere better to go -> leave it, stop
+            break
+        loser.start_time = slot
+        moves.append((loser, original, slot))
+    return moves
+```
+
+### Gemini's solution (Option B) — verified working
+
+```python
+def auto_reschedule(self) -> list[str]:
+    """Resolve all scheduling conflicts by moving lower-priority tasks."""
+    log: list[str] = []
+    max_iterations = 100  # Safety bound to guarantee termination
+    for _ in range(max_iterations):
+        conflicts = self.detect_conflicts()
+        if not conflicts:
+            break
+        t1, t2 = conflicts[0]
+        # Lower priority (higher IntEnum value); tie-break by later start time.
+        if t1.priority > t2.priority:
+            to_move, fixed = t1, t2
+        elif t2.priority > t1.priority:
+            to_move, fixed = t2, t1
+        else:
+            to_move, fixed = (t2, t1) if (t2.start_minutes or 0) >= (t1.start_minutes or 0) else (t1, t2)
+        old_time = to_move.start_time
+        new_slot = self.find_next_available_slot(duration=to_move.duration, on_date=to_move.due_date)
+        if new_slot:
+            to_move.start_time = new_slot
+            log.append(f"Moved '{to_move.name}' from {old_time} to {new_slot} to resolve conflict with '{fixed.name}'.")
+        else:
+            to_move.start_time = None  # unschedule so it can't conflict -> guarantees termination
+            log.append(f"Unscheduled '{to_move.name}' (no slots remaining) to resolve conflict with '{fixed.name}'.")
+    return log
+```
+
+> **Note:** Both options are *real* model output, run against the actual
+> `pawpal_system.py` classes. Option A is Claude's; Option B is Gemini's verbatim
+> answer (only re-indented to fit the method). Neither transcript was invented.
+
+### Verification (both run on the real classes)
+
+| Scenario | Claude (A) | Gemini (B) |
+|----------|-----------|-----------|
+| `main.py` day, 4 conflicts | 3 moves → **0 conflicts** | same 3 moves → **0 conflicts** |
+| Packed day, 1 low-pri task can't fit | **bails on first failure → 2 conflicts left** | unschedules the clashers → **0 conflicts** |
 
 **Which approach did you use in your final implementation and why?**
 
-<!-- Your conclusion -->
+Neither verbatim — a **hybrid**, because each model contributed a piece the other
+got wrong:
+
+- **From Claude:** null the loser's `start_time` *before* searching, so it doesn't
+  count itself as booked and get pushed later than necessary.
+- **From Gemini:** on no-slot, **unschedule** the task and continue instead of
+  bailing — this is the better termination strategy and the only one that clears
+  *every* conflict (Claude's early `break` left conflicts on the packed day).
+- **My addition:** keep a structured return *and* surface the unscheduling loudly
+  (Gemini logs it but it's easy to miss that a task silently lost its time).
+
+```python
+def auto_reschedule(self, day_start="08:00", day_end="20:00", max_passes=100):
+    """Clear all conflicts by moving (or, as a last resort, unscheduling) the
+    lower-priority task of each conflict. Returns (task, old_time, new_time)
+    moves; new_time is None when a task had to be unscheduled."""
+    moves = []
+    for _ in range(max_passes):
+        conflicts = self.detect_conflicts()
+        if not conflicts:
+            break
+        a, b = conflicts[0]
+        loser = max((a, b), key=lambda t: (t.priority, t.start_minutes, t.duration))
+        old = loser.start_time
+        loser.start_time = None  # (Claude) don't let it block its own search
+        slot = self.find_next_available_slot(loser.duration, day_start, day_end, on_date=loser.due_date)
+        loser.start_time = slot   # (Gemini) slot=None just unschedules it -> still terminates
+        moves.append((loser, old, slot))
+    return moves
+```
+
+**Takeaway:** the two models converged on the *same* core algorithm and gave
+identical results on the easy case; the real signal was in the failure path,
+which only showed up under an adversarial (packed-day) test. Running both against
+the actual code — not just reading them — is what surfaced the difference.
+

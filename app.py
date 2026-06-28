@@ -33,13 +33,24 @@ st.subheader("Owner & Pets")
 owner_name = st.text_input("Owner name", value="Jordan")
 
 # Persist the Owner across re-runs. Streamlit re-runs this whole script on every
-# interaction, so we only create the Owner if one isn't already in the session
-# "vault" -- otherwise we'd wipe its pets/tasks on every click.
+# interaction, so we only build the Owner if one isn't already in the session
+# "vault" -- otherwise we'd wipe its pets/tasks on every click. On the very first
+# run we try to load a previous session from data.json (Owner.load_from_json),
+# falling back to a fresh Owner when no save file exists yet.
 if "owner" not in st.session_state:
-    st.session_state.owner = Owner(owner_name)
+    st.session_state.owner = Owner.load_from_json() or Owner(owner_name)
 
-# Keep the persisted owner's name in sync with the input box.
-st.session_state.owner.name = owner_name
+
+def save_owner() -> None:
+    """Write the current owner (pets + tasks) to data.json so it survives a restart."""
+    st.session_state.owner.save_to_json()
+
+
+# Keep the persisted owner's name in sync with the input box, then save so a
+# renamed owner isn't lost on the next restart.
+if st.session_state.owner.name != owner_name:
+    st.session_state.owner.name = owner_name
+    save_owner()
 
 # --- Add a Pet -> Owner.add_pet() -------------------------------------------
 st.markdown("### Add a Pet")
@@ -52,6 +63,7 @@ with col_b:
 if st.button("Add pet"):
     if pet_name.strip():
         st.session_state.owner.add_pet(Pet(pet_name, species))
+        save_owner()
         st.success(f"Added {pet_name} the {species}.")
     else:
         st.warning("Please enter a pet name.")
@@ -93,6 +105,7 @@ else:
                 start_time=start.strftime("%H:%M"),
             )
         )
+        save_owner()
         st.success(f"Added '{task_title}' for {which_pet}.")
 
     # Suggest the earliest free start time for a task of this duration, working
@@ -163,6 +176,7 @@ if all_tasks:
                     ].index(done_choice)
                 ]
                 upcoming = task.mark_complete()
+                save_owner()
                 if upcoming is not None:
                     st.success(
                         f"Marked '{task.name}' done. Next {task.frequency} occurrence "

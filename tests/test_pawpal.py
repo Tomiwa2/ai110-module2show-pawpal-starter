@@ -7,7 +7,7 @@ from datetime import date, timedelta
 # Make pawpal_system.py (one directory up) importable when running pytest.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pawpal_system import Pet, Task, Priority, Scheduler
+from pawpal_system import Owner, Pet, Task, Priority, Scheduler
 
 
 def test_mark_complete_changes_status():
@@ -192,3 +192,59 @@ def test_next_available_slot_is_date_aware():
 
     # Searching today, tomorrow's booking is irrelevant -> 08:00 is free.
     assert scheduler.find_next_available_slot(60, day_start="08:00", on_date=today) == "08:00"
+
+
+# --- Persistence (save/load JSON) ------------------------------------------
+
+
+def _sample_owner() -> Owner:
+    """An owner with two pets, varied priorities, dates, and a completed task."""
+    owner = Owner("Ada")
+    rex = Pet("Rex", "dog")
+    bella = Pet("Bella", "cat")
+    owner.add_pet(rex)
+    owner.add_pet(bella)
+    rex.add_task(
+        Task("Morning walk", 30, Priority.HIGH, start_time="08:00",
+             frequency="daily", due_date=date(2026, 6, 28))
+    )
+    done = Task("Refill water", 5, Priority.LOW, completed=True)  # undated, unscheduled
+    bella.add_task(done)
+    return owner
+
+
+def test_save_and_load_round_trip_preserves_data(tmp_path):
+    """Saving then loading reproduces the owner's pets and tasks exactly."""
+    path = str(tmp_path / "data.json")
+    _sample_owner().save_to_json(path)
+
+    loaded = Owner.load_from_json(path)
+
+    assert loaded is not None
+    assert loaded.name == "Ada"
+    assert [p.name for p in loaded.get_pets()] == ["Rex", "Bella"]
+
+    walk = loaded.get_pets()[0].get_tasks()[0]
+    assert walk.priority is Priority.HIGH        # IntEnum survives the round trip
+    assert walk.due_date == date(2026, 6, 28)    # date survives as well
+    assert walk.start_time == "08:00"
+    assert walk.completed is False
+
+
+def test_load_restores_pet_back_reference(tmp_path):
+    """The Task.pet link (never serialized) is rebuilt on load."""
+    path = str(tmp_path / "data.json")
+    _sample_owner().save_to_json(path)
+
+    loaded = Owner.load_from_json(path)
+
+    rex = loaded.get_pets()[0]
+    walk = rex.get_tasks()[0]
+    assert walk.pet is rex  # back-reference restored via Pet.add_task()
+
+
+def test_load_from_missing_file_returns_none(tmp_path):
+    """Loading before anything has been saved returns None (clean first run)."""
+    missing = str(tmp_path / "does_not_exist.json")
+
+    assert Owner.load_from_json(missing) is None

@@ -7,9 +7,14 @@ Design:
   reaches into a Pet's internals -- it asks the Owner for a flat task list.
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from enum import IntEnum
+
+# Default file the Owner reads from / writes to so pets and tasks survive between
+# application runs.
+DEFAULT_DATA_PATH = "data.json"
 
 # How far ahead the next occurrence of a recurring task lands. Only fixed-length
 # cycles live here: timedelta has no "months" unit because calendar months vary,
@@ -158,6 +163,45 @@ class Task:
             f"({self.duration} min) [priority: {self.priority.name.lower()}]"
         )
 
+    def to_dict(self) -> dict:
+        """Convert this task into a JSON-serializable dict.
+
+        Three fields need special handling so they survive a round trip through
+        JSON: `priority` is an IntEnum (stored as its int value), `due_date` is a
+        date (stored as an ISO 'YYYY-MM-DD' string), and the `pet` back-reference
+        is deliberately omitted -- serializing it would recurse forever
+        (pet -> tasks -> task -> pet -> ...). The link is rebuilt on load via
+        Pet.add_task(), which re-sets each task's `pet`.
+        """
+        return {
+            "name": self.name,
+            "duration": self.duration,
+            "priority": int(self.priority),
+            "start_time": self.start_time,
+            "frequency": self.frequency,
+            "due_date": self.due_date.isoformat() if self.due_date else None,
+            "completed": self.completed,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        """Rebuild a Task from a dict produced by to_dict().
+
+        Reverses the special-casing: the int priority becomes a Priority again
+        and the ISO date string becomes a date. The `pet` link is intentionally
+        not restored here -- Pet.from_dict() re-attaches each task to its pet.
+        """
+        due_date = data.get("due_date")
+        return cls(
+            name=data["name"],
+            duration=data["duration"],
+            priority=Priority(data["priority"]),
+            start_time=data.get("start_time"),
+            frequency=data.get("frequency", "daily"),
+            due_date=date.fromisoformat(due_date) if due_date else None,
+            completed=data.get("completed", False),
+        )
+
 
 @dataclass
 class Pet:
@@ -176,6 +220,26 @@ class Pet:
     def get_tasks(self) -> list[Task]:
         """Return this pet's list of tasks."""
         return self.tasks
+
+    def to_dict(self) -> dict:
+        """Convert this pet (and its tasks) into a JSON-serializable dict."""
+        return {
+            "name": self.name,
+            "species": self.species,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Pet":
+        """Rebuild a Pet and its tasks from a dict produced by to_dict().
+
+        Each task is routed through add_task() rather than appended directly, so
+        the `pet` back-reference (skipped during serialization) is restored here.
+        """
+        pet = cls(name=data["name"], species=data["species"])
+        for task_data in data.get("tasks", []):
+            pet.add_task(Task.from_dict(task_data))
+        return pet
 
 
 @dataclass
@@ -202,6 +266,46 @@ class Owner:
         """
         return [task for pet in self.pets for task in pet.tasks]
 
+    def to_dict(self) -> dict:
+        """Convert this owner (and its full pet/task tree) into a plain dict."""
+        return {
+            "name": self.name,
+            "pets": [pet.to_dict() for pet in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Owner":
+        """Rebuild an Owner and its entire pet/task tree from a dict."""
+        owner = cls(name=data["name"])
+        for pet_data in data.get("pets", []):
+            owner.add_pet(Pet.from_dict(pet_data))
+        return owner
+
+    def save_to_json(self, path: str = DEFAULT_DATA_PATH) -> None:
+        """Persist this owner's pets and tasks to a JSON file.
+
+        Serializes the whole object tree (owner -> pets -> tasks) via to_dict()
+        and writes it as pretty-printed JSON so the file is human-readable and
+        diff-friendly. Call this after any change you want to survive a restart.
+        """
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(self.to_dict(), file, indent=2)
+
+    @classmethod
+    def load_from_json(cls, path: str = DEFAULT_DATA_PATH) -> "Owner | None":
+        """Load a previously saved Owner from a JSON file.
+
+        Returns the rebuilt Owner, or None if no save file exists yet (a clean
+        first run). Routing the data back through from_dict() restores the
+        Priority enums, dates, and pet back-references that to_dict() flattened.
+        """
+        try:
+            with open(path, encoding="utf-8") as file:
+                data = json.load(file)
+        except FileNotFoundError:
+            return None
+        return cls.from_dict(data)
+
 
 class Scheduler:
     """The 'brain': sorts the day, detects conflicts, manages recurring tasks."""
@@ -218,14 +322,30 @@ class Scheduler:
         """
         return cls(owner.get_all_tasks())
 
-    def sort_tasks(self) -> list[Task]:
-        """Order the day by start time, then priority for tasks without a time.
+    def sort_tasks(self, by_priority: bool = False) -> list[Task]:
+        """Order the day's tasks in place and return them.
 
-        Unscheduled tasks (no start_time) sort after timed ones.
+        Two strategies, switched by `by_priority`:
+
+        - **Time-first (default)** — sort by start time, using `Priority` only to
+          break ties between tasks at the same clock time.
+        - **Priority-first** (`by_priority=True`) — sort by `Priority`
+          (HIGH → MEDIUM → LOW) first, then by start time within each priority
+          band. This surfaces "do the important things first" even when a
+          lower-priority task happens to start earlier.
+
+        In both modes, unscheduled tasks (no start_time) sort after timed ones.
+        Because `Priority` is an `IntEnum` with HIGH=0, it sorts ascending into
+        HIGH → MEDIUM → LOW with no extra bookkeeping.
         """
-        self.tasks_to_schedule.sort(
-            key=lambda t: (t.start_minutes is None, t.start_minutes or 0, t.priority)
-        )
+        if by_priority:
+            self.tasks_to_schedule.sort(
+                key=lambda t: (t.priority, t.start_minutes is None, t.start_minutes or 0)
+            )
+        else:
+            self.tasks_to_schedule.sort(
+                key=lambda t: (t.start_minutes is None, t.start_minutes or 0, t.priority)
+            )
         return self.tasks_to_schedule
 
     def detect_conflicts(self) -> list[tuple[Task, Task]]:
@@ -353,7 +473,12 @@ class Scheduler:
             )
         return warnings
 
-    def generate_plan(self) -> list[Task]:
-        """Return today's routine: pending tasks, sorted into the day's order."""
-        self.sort_tasks()
+    def generate_plan(self, by_priority: bool = False) -> list[Task]:
+        """Return today's routine: pending tasks, sorted into the day's order.
+
+        Passes `by_priority` straight through to `sort_tasks()`, so callers can
+        ask for a priority-first plan ("important things first") or the default
+        time-first one without re-sorting themselves.
+        """
+        self.sort_tasks(by_priority=by_priority)
         return [task for task in self.tasks_to_schedule if not task.completed]
