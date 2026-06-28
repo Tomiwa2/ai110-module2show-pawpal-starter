@@ -46,6 +46,7 @@ classDiagram
         +from_owner(owner) Scheduler
         +sort_tasks() List~Task~
         +detect_conflicts() List~TaskPair~
+        +find_next_available_slot(duration, day_start, day_end, on_date) string
         +filter_tasks(completed, pet_name) List~Task~
         +conflict_warnings() List~string~
         +generate_plan() List~Task~

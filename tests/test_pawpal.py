@@ -129,3 +129,66 @@ def test_detect_conflicts_ignores_completed_tasks():
     scheduler = Scheduler([done, pending])
 
     assert scheduler.detect_conflicts() == []
+
+
+# --- Next available slot ---------------------------------------------------
+
+
+def test_next_available_slot_empty_day_returns_day_start():
+    """With nothing booked, the first free slot is the start of the day."""
+    scheduler = Scheduler([])
+
+    assert scheduler.find_next_available_slot(30, day_start="08:00") == "08:00"
+
+
+def test_next_available_slot_finds_gap_between_tasks():
+    """A task fits in the gap between two booked tasks when it's big enough."""
+    morning = Task("Walk", 30, Priority.HIGH, start_time="08:00")  # 08:00-08:30
+    later = Task("Vet", 30, Priority.LOW, start_time="10:00")  # 10:00-10:30
+    scheduler = Scheduler([morning, later])
+
+    # 08:30-10:00 is a 90-min gap; a 60-min task slots in at 08:30.
+    assert scheduler.find_next_available_slot(60, day_start="08:00") == "08:30"
+
+
+def test_next_available_slot_skips_gap_that_is_too_small():
+    """A gap smaller than the duration is skipped for the next viable one."""
+    first = Task("Walk", 30, Priority.HIGH, start_time="08:00")  # 08:00-08:30
+    second = Task("Feed", 30, Priority.MEDIUM, start_time="09:00")  # 09:00-09:30
+    scheduler = Scheduler([first, second])
+
+    # The 08:30-09:00 gap is only 30 min, too small for a 45-min task, so the
+    # next free slot is after the second task ends, at 09:30.
+    assert scheduler.find_next_available_slot(45, day_start="08:00") == "09:30"
+
+
+def test_next_available_slot_returns_none_when_day_is_full():
+    """When nothing fits before day_end, the search returns None."""
+    task = Task("All day", 60, Priority.HIGH, start_time="08:00")  # 08:00-09:00
+    scheduler = Scheduler([task])
+
+    # Only 08:00-09:00 window, fully booked -> no room for a 30-min task.
+    assert scheduler.find_next_available_slot(30, day_start="08:00", day_end="09:00") is None
+
+
+def test_next_available_slot_ignores_completed_and_unscheduled():
+    """Completed tasks free their slot and unscheduled tasks block nothing."""
+    done = Task("Walk", 60, Priority.HIGH, start_time="08:00", completed=True)
+    floating = Task("Buy food", 30, Priority.LOW)  # no start_time
+    scheduler = Scheduler([done, floating])
+
+    # The completed task doesn't block, so the day is wide open at 08:00.
+    assert scheduler.find_next_available_slot(60, day_start="08:00") == "08:00"
+
+
+def test_next_available_slot_is_date_aware():
+    """A task dated for another day doesn't block the requested date."""
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    booked_tomorrow = Task(
+        "Vet", 120, Priority.HIGH, start_time="08:00", due_date=tomorrow
+    )
+    scheduler = Scheduler([booked_tomorrow])
+
+    # Searching today, tomorrow's booking is irrelevant -> 08:00 is free.
+    assert scheduler.find_next_available_slot(60, day_start="08:00", on_date=today) == "08:00"

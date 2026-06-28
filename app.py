@@ -95,6 +95,22 @@ else:
         )
         st.success(f"Added '{task_title}' for {which_pet}.")
 
+    # Suggest the earliest free start time for a task of this duration, working
+    # around everything already booked -> Scheduler.find_next_available_slot().
+    if st.button("🔎 Find next free slot"):
+        slot_scheduler = Scheduler.from_owner(st.session_state.owner)
+        slot = slot_scheduler.find_next_available_slot(int(duration))
+        if slot is not None:
+            st.info(
+                f"Earliest free {int(duration)}-min slot today is **{slot}** "
+                "(within 08:00–20:00)."
+            )
+        else:
+            st.warning(
+                f"No free {int(duration)}-min slot left before 20:00 — "
+                "the day is full."
+            )
+
 # Show the owner's tasks, sorted into the day's order and filterable.
 all_tasks = st.session_state.owner.get_all_tasks()
 if all_tasks:

@@ -34,6 +34,11 @@ def _to_minutes(hhmm: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def _to_hhmm(minutes: int) -> str:
+    """Convert minutes since midnight back into a zero-padded 'HH:MM' string."""
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
 def _same_day(a: "Task", b: "Task") -> bool:
     """True if two tasks could land on the same day.
 
@@ -248,6 +253,59 @@ class Scheduler:
                 if _same_day(timed[i], timed[j]) and timed[i].overlaps(timed[j]):
                     conflicts.append((timed[i], timed[j]))
         return conflicts
+
+    def find_next_available_slot(
+        self,
+        duration: int,
+        day_start: str = "08:00",
+        day_end: str = "20:00",
+        on_date: date | None = None,
+    ) -> str | None:
+        """Find the earliest free start time that fits a `duration`-minute task.
+
+        Scans the day's already-booked intervals and returns the first gap big
+        enough to hold a new task, as a 'HH:MM' string. Returns None if the day
+        is too full to fit it before `day_end`.
+
+        Only pending, timed tasks count as "booked" (completed tasks free up
+        their slot, and unscheduled tasks have no slot to block). Date handling
+        mirrors conflict detection: when `on_date` is given, a task blocks the
+        day only if it's dated for that day or is undated (an undated task floats
+        to "any day"); with no `on_date`, every timed task is treated as booked.
+
+        The search window is [day_start, day_end); a slot is only returned if the
+        whole task finishes by day_end.
+        """
+        if duration <= 0:
+            raise ValueError("Duration must be a positive number of minutes")
+
+        window_start = _to_minutes(day_start)
+        window_end = _to_minutes(day_end)
+
+        # Collect the booked intervals (start, end), clipped to the window.
+        booked: list[tuple[int, int]] = []
+        for task in self.tasks_to_schedule:
+            if task.start_minutes is None or task.completed:
+                continue
+            if on_date is not None and task.due_date is not None and task.due_date != on_date:
+                continue  # dated for a different day -> doesn't block this one
+            start = max(task.start_minutes, window_start)
+            end = min(task.end_minutes, window_end)
+            if start < end:  # keep only the part that overlaps the window
+                booked.append((start, end))
+
+        # Sweep the window left to right, tracking the cursor at the end of the
+        # last booked interval. The first gap >= duration before an interval
+        # (or before day_end after the last one) is our answer.
+        booked.sort()
+        cursor = window_start
+        for start, end in booked:
+            if start - cursor >= duration:
+                return _to_hhmm(cursor)
+            cursor = max(cursor, end)
+        if window_end - cursor >= duration:
+            return _to_hhmm(cursor)
+        return None
 
     def filter_tasks(
         self,

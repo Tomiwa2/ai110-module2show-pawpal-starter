@@ -87,6 +87,16 @@ def main() -> None:
     else:
         print("No conflicts — the day flows cleanly.")
 
+    # 8. Suggest the earliest free slot for a new task, working around the
+    #    already-booked times for today.
+    print("\n--- Next available slot ---")
+    new_duration = 45
+    slot = scheduler.find_next_available_slot(new_duration, on_date=today)
+    if slot is not None:
+        print(f"Earliest free {new_duration}-min slot today: {slot}")
+    else:
+        print(f"No free {new_duration}-min slot left in the day.")
+
 
 if __name__ == "__main__":
     main()

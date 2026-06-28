@@ -23,6 +23,11 @@ The scheduling algorithms all live in `pawpal_system.py`:
   tasks (no start time) always sort last.
 - **Daily plan generation** — `Scheduler.generate_plan()` returns today's routine:
   the sorted task list with completed tasks dropped.
+- **Next available slot** — `Scheduler.find_next_available_slot()` sweeps the day's
+  booked intervals and returns the earliest free `HH:MM` start time that fits a
+  task of a given duration (within a configurable working window), or `None` when
+  the day is too full. It is date-aware and ignores completed/unscheduled tasks,
+  just like conflict detection.
 - **Conflict warnings** — `Scheduler.detect_conflicts()` finds every pair of
   pending, timed tasks whose ranges overlap — even across different pets, since
   the owner can't be in two places at once. It is **date-aware** (a task dated for
@@ -92,6 +97,7 @@ The suite (`tests/test_pawpal.py`) exercises the core scheduling logic:
 - **Sorting correctness** — timed tasks come back in chronological order, ties are broken by priority (HIGH first), and unscheduled tasks sort last.
 - **Recurrence logic** — completing a `daily` task spawns a pending copy dated one day later and auto-attaches it to the same pet, while a `once` task never repeats.
 - **Conflict detection** — two pending tasks at the exact same time are flagged, back-to-back tasks that only touch at the boundary are not, and completed tasks are ignored.
+- **Next available slot** — an empty day suggests the working-window start, a too-small gap is skipped for the next viable one, a full day returns `None`, and completed/unscheduled/other-day tasks are correctly ignored.
 
 ### Sample test output
 
@@ -100,18 +106,18 @@ The suite (`tests/test_pawpal.py`) exercises the core scheduling logic:
 platform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0
 rootdir: C:\Users\Ire\Desktop\Codepath AI 110\ai110-module2show-pawpal-starter
 plugins: anyio-4.14.1
-collected 10 items
+collected 16 items
 
-tests\test_pawpal.py ..........                                          [100%]
+tests\test_pawpal.py ................                                    [100%]
 
-============================= 10 passed in 0.09s ==============================
+============================= 16 passed in 0.10s ==============================
 ```
 
 ### Confidence Level
 
 ⭐⭐⭐⭐☆ (4/5)
 
-All 10 tests pass, covering the three highest-risk areas — sorting, recurrence, and conflict detection — including their key edge cases (same-time conflicts, touching boundaries, `once` tasks). The fourth star reflects solid coverage of the critical paths; the fifth is held back because some behaviors are not yet tested: `filter_tasks()`, date-aware conflicts (today vs. tomorrow), cross-pet conflict warnings, undated recurring tasks, and input validation (empty names, non-positive durations).
+All 16 tests pass, covering the four highest-risk areas — sorting, recurrence, conflict detection, and next-available-slot search — including their key edge cases (same-time conflicts, touching boundaries, `once` tasks, too-small gaps, full days, and date-aware slot finding). The fourth star reflects solid coverage of the critical paths; the fifth is held back because some behaviors are not yet tested: `filter_tasks()`, date-aware conflicts (today vs. tomorrow), cross-pet conflict warnings, undated recurring tasks, and input validation (empty names, non-positive durations).
 
 ## 📐 System Design (UML)
 
@@ -138,6 +144,7 @@ implemented and the method that powers it.
 | Task sorting | `Scheduler.sort_tasks()` | Orders the day by start time, with `Priority` as a tie-breaker; unscheduled tasks sort last. |
 | Filtering | `Scheduler.filter_tasks()` | Filters by completion status and/or pet name (case-insensitive); the two filters combine with AND. |
 | Conflict detection | `Scheduler.detect_conflicts()`, `Scheduler.conflict_warnings()`, `Task.overlaps()`, `_same_day()` | Finds overlapping timed tasks across any pets and returns either pairs or printable warnings. |
+| Next available slot | `Scheduler.find_next_available_slot()` | Sweeps booked intervals to suggest the earliest free start time that fits a new task within the working window. |
 | Recurring tasks | `Task.mark_complete()`, `Task.next_occurrence()` | Completing a daily/weekly task auto-creates its next occurrence on the next date. |
 
 ### Sorting behavior — `Scheduler.sort_tasks()`
@@ -171,6 +178,18 @@ detection date-aware so tomorrow's recurring task can't clash with today's.
 with a sweep-line early exit), while `conflict_warnings()` is a lightweight
 wrapper that turns each pair into a printable warning string and never raises.
 
+### Next available slot — `Scheduler.find_next_available_slot()`
+
+Given a task `duration` (and an optional working window, default `08:00`–`20:00`),
+this sweeps the day's **pending, timed** tasks as booked intervals, sorts them,
+and walks a cursor from `day_start`, returning the first gap large enough to hold
+the new task as an `HH:MM` string — or `None` if nothing fits before `day_end`. It
+clips bookings to the window, merges overlaps as it sweeps, and mirrors conflict
+detection's rules: completed and unscheduled tasks never block a slot, and with an
+`on_date` argument a task only blocks the day it's dated for (undated tasks float
+to "any day"). This turns "when can I fit a 45-minute grooming session?" into a
+one-call answer instead of eyeballing the schedule.
+
 ### Recurring task logic — `Task.mark_complete()` / `next_occurrence()`
 
 Tasks carry a `frequency` (`"daily"`, `"weekly"`, etc.) and an optional
@@ -194,6 +213,8 @@ Run `streamlit run app.py`. The app lets a user:
   species (`Owner.add_pet` / `Pet`).
 - **Add tasks to a pet** — give each task a title, duration, priority, start time,
   and the pet it belongs to (`Pet.add_task`).
+- **Find the next free slot** — ask PawPal+ for the earliest open start time that
+  fits a task of the chosen duration (`Scheduler.find_next_available_slot`).
 - **Browse and filter tasks** — the task table is sorted into the day's order, with
   dropdowns to filter by pet and by status (All / Pending / Done) via
   `Scheduler.filter_tasks()`.
@@ -274,6 +295,9 @@ Rex's tasks now (note the new pending walk for tomorrow):
 WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Play fetch' (14:00).
 WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Vet visit' (14:00).
 WARNING - conflict for Rex's schedule: 'Play fetch' (14:00) overlaps 'Vet visit' (14:00).
+
+--- Next available slot ---
+Earliest free 45-min slot today: 08:25
 ```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
