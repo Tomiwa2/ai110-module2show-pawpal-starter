@@ -85,19 +85,40 @@ WARNING - conflict for Rex's schedule: 'Play fetch' (14:00) overlaps 'Vet visit'
 
 ## 🧪 Testing PawPal+
 
+Run the full test suite from the project root:
+
 ```bash
-# Run the full test suite:
-pytest
-
-# Run with coverage:
-pytest --cov
+python -m pytest
 ```
 
-Sample test output:
+### What the tests cover
+
+The suite (`tests/test_pawpal.py`) exercises the core scheduling logic:
+
+- **Data objects** — adding a task to a pet increases its task count; `mark_complete()` flips a task's status.
+- **Sorting correctness** — timed tasks come back in chronological order, ties are broken by priority (HIGH first), and unscheduled tasks sort last.
+- **Recurrence logic** — completing a `daily` task spawns a pending copy dated one day later and auto-attaches it to the same pet, while a `once` task never repeats.
+- **Conflict detection** — two pending tasks at the exact same time are flagged, back-to-back tasks that only touch at the boundary are not, and completed tasks are ignored.
+
+### Sample test output
 
 ```
-# Paste your pytest output here
+============================= test session starts =============================
+platform win32 -- Python 3.13.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\Ire\Desktop\Codepath AI 110\ai110-module2show-pawpal-starter
+plugins: anyio-4.14.1
+collected 10 items
+
+tests\test_pawpal.py ..........                                          [100%]
+
+============================= 10 passed in 0.09s ==============================
 ```
+
+### Confidence Level
+
+⭐⭐⭐⭐☆ (4/5)
+
+All 10 tests pass, covering the three highest-risk areas — sorting, recurrence, and conflict detection — including their key edge cases (same-time conflicts, touching boundaries, `once` tasks). The fourth star reflects solid coverage of the critical paths; the fifth is held back because some behaviors are not yet tested: `filter_tasks()`, date-aware conflicts (today vs. tomorrow), cross-pet conflict warnings, undated recurring tasks, and input validation (empty names, non-positive durations).
 
 ## 📐 Smarter Scheduling
 
