@@ -3,12 +3,18 @@
 Run with:  python main.py
 """
 
+from datetime import date
+
 from pawpal_system import Owner, Pet, Task, Scheduler, Priority
 
 
 def main() -> None:
     # 1. Create an owner.
     owner = Owner("Ada")
+
+    # Anchor every task to today so a completed daily task's next occurrence
+    # lands cleanly on *tomorrow* and can't be mistaken for a same-day conflict.
+    today = date.today()
 
     # 2. Create at least two pets and add them to the owner.
     rex = Pet("Rex", "dog")
@@ -18,16 +24,16 @@ def main() -> None:
 
     # 3. Add tasks deliberately OUT OF ORDER (late times first, mixed pets) so
     #    we can prove the scheduler sorts them back into the day's real order.
-    bella.add_task(Task("Brush coat", 15, Priority.MEDIUM, start_time="18:00", frequency="weekly"))
-    rex.add_task(Task("Vet visit", 60, Priority.LOW, start_time="14:00", frequency="monthly"))
-    rex.add_task(Task("Morning walk", 30, Priority.HIGH, start_time="08:00", frequency="daily"))
-    bella.add_task(Task("Feed", 10, Priority.MEDIUM, start_time="08:15", frequency="daily"))
+    bella.add_task(Task("Brush coat", 15, Priority.MEDIUM, start_time="18:00", frequency="weekly", due_date=today))
+    rex.add_task(Task("Vet visit", 60, Priority.LOW, start_time="14:00", frequency="monthly", due_date=today))
+    rex.add_task(Task("Morning walk", 30, Priority.HIGH, start_time="08:00", frequency="daily", due_date=today))
+    bella.add_task(Task("Feed", 10, Priority.MEDIUM, start_time="08:15", frequency="daily", due_date=today))
     # Two tasks at the EXACT same time on different pets -> the owner can't be in
     # two places at once, so this must be flagged as a conflict.
-    rex.add_task(Task("Play fetch", 20, Priority.MEDIUM, start_time="14:00", frequency="daily"))
-    bella.add_task(Task("Litter change", 10, Priority.HIGH, start_time="14:00", frequency="daily"))
+    rex.add_task(Task("Play fetch", 20, Priority.MEDIUM, start_time="14:00", frequency="daily", due_date=today))
+    bella.add_task(Task("Litter change", 10, Priority.HIGH, start_time="14:00", frequency="daily", due_date=today))
     # An already-completed task, to show the completion filter working.
-    done_task = Task("Refill water", 5, Priority.HIGH, start_time="07:30", frequency="daily")
+    done_task = Task("Refill water", 5, Priority.HIGH, start_time="07:30", frequency="daily", due_date=today)
     done_task.mark_complete()
     rex.add_task(done_task)
 

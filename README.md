@@ -12,6 +12,34 @@ A busy pet owner needs help staying consistent with pet care. They want an assis
 
 Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
 
+## ✨ Features
+
+PawPal+ turns a flat list of pet-care tasks into a conflict-checked daily plan.
+The scheduling algorithms all live in `pawpal_system.py`:
+
+- **Sorting by time** — `Scheduler.sort_tasks()` orders the day by start time
+  (computed as minutes since midnight, so `"9:30"` and `"09:30"` sort correctly),
+  using task **priority** (HIGH → MEDIUM → LOW) only to break ties. Unscheduled
+  tasks (no start time) always sort last.
+- **Daily plan generation** — `Scheduler.generate_plan()` returns today's routine:
+  the sorted task list with completed tasks dropped.
+- **Conflict warnings** — `Scheduler.detect_conflicts()` finds every pair of
+  pending, timed tasks whose ranges overlap — even across different pets, since
+  the owner can't be in two places at once. It is **date-aware** (a task dated for
+  tomorrow can't clash with one for today) and uses a sweep-line early-exit for
+  efficiency. `conflict_warnings()` turns each conflict into a readable message.
+- **Daily / weekly recurrence** — completing a recurring task with
+  `Task.mark_complete()` auto-creates its next occurrence (`+1 day` for daily,
+  `+1 week` for weekly) and attaches it to the same pet. `"once"`/`"monthly"`
+  tasks don't auto-repeat.
+- **Filtering** — `Scheduler.filter_tasks()` filters by completion status and/or
+  pet name (case-insensitive); the two filters combine with AND.
+- **Input validation** — tasks reject empty names and non-positive durations at
+  construction time.
+
+See [System Design (UML)](#-system-design-uml) for how these classes fit together
+and [Smarter Scheduling](#-smarter-scheduling) for per-method detail.
+
 ## What you will build
 
 Your final app should:
@@ -44,44 +72,9 @@ pip install -r requirements.txt
 
 ## 🖥️ Sample Output
 
-Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
-
-```
-# e.g.:
-# Daily plan for Biscuit (Golden Retriever):
-#   08:00 — Morning walk (30 min) [priority: high]
-#   09:00 — Feeding (10 min) [priority: high]
-#   ...
-```
-
-```
-=== Today's Schedule for Ada ===
-[ ] 08:00 Morning walk (for Rex) (30 min) [priority: high]
-[ ] 08:15 Feed (for Bella) (10 min) [priority: medium]
-[ ] 14:00 Litter change (for Bella) (10 min) [priority: high]
-[ ] 14:00 Play fetch (for Rex) (20 min) [priority: medium]
-[ ] 14:00 Vet visit (for Rex) (60 min) [priority: low]
-[ ] 18:00 Brush coat (for Bella) (15 min) [priority: medium]
-
---- Conflict check ---
-WARNING - conflict for Rex and Bella: 'Morning walk' (08:00) overlaps 'Feed' (08:15).
-WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Play fetch' (14:00).
-WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Vet visit' (14:00).
-WARNING - conflict for Rex's schedule: 'Play fetch' (14:00) overlaps 'Vet visit' (14:00).
-```
-
-### Previous output (old format)
-
-```
-=== Today's Schedule for Ada ===
-[ ] 08:00 Morning walk (for Rex) (30 min) [priority: high]
-[ ] 08:15 Feed (for Bella) (10 min) [priority: medium]
-[ ] 14:00 Vet visit (for Rex) (60 min) [priority: low]
-[ ] 18:00 Brush coat (for Bella) (15 min) [priority: medium]
-
-!! Conflicts detected:
-   'Morning walk' (08:00) overlaps 'Feed' (08:15)
-```
+See the [Demo Walkthrough](#-demo-walkthrough) below for full, up-to-date sample
+output from `python main.py` (the sorted plan, filters, recurrence, and conflict
+check).
 
 ## 🧪 Testing PawPal+
 
@@ -119,6 +112,21 @@ tests\test_pawpal.py ..........                                          [100%]
 ⭐⭐⭐⭐☆ (4/5)
 
 All 10 tests pass, covering the three highest-risk areas — sorting, recurrence, and conflict detection — including their key edge cases (same-time conflicts, touching boundaries, `once` tasks). The fourth star reflects solid coverage of the critical paths; the fifth is held back because some behaviors are not yet tested: `filter_tasks()`, date-aware conflicts (today vs. tomorrow), cross-pet conflict warnings, undated recurring tasks, and input validation (empty names, non-positive durations).
+
+## 📐 System Design (UML)
+
+The class diagram below reflects the final implementation in `pawpal_system.py`.
+Source: [`diagrams/uml_final.mmd`](diagrams/uml_final.mmd).
+
+![PawPal+ UML class diagram](diagrams/uml_final.png)
+
+The PNG is generated from the Mermaid source. After editing `uml_final.mmd`,
+re-export it with the [Mermaid CLI](https://github.com/mermaid-js/mermaid-cli)
+(requires Node.js):
+
+```bash
+npx @mermaid-js/mermaid-cli -i diagrams/uml_final.mmd -o diagrams/uml_final.png -b white
+```
 
 ## 📐 Smarter Scheduling
 
@@ -174,12 +182,98 @@ auto-repeat (`timedelta` has no calendar-month unit).
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+PawPal+ has two front ends over the same scheduling engine: a **Streamlit UI**
+(`app.py`) for interactive use and a **CLI script** (`main.py`) that exercises
+every feature end to end.
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+### Main UI features (Streamlit)
+
+Run `streamlit run app.py`. The app lets a user:
+
+- **Add an owner and pets** — enter the owner's name, then add pets by name and
+  species (`Owner.add_pet` / `Pet`).
+- **Add tasks to a pet** — give each task a title, duration, priority, start time,
+  and the pet it belongs to (`Pet.add_task`).
+- **Browse and filter tasks** — the task table is sorted into the day's order, with
+  dropdowns to filter by pet and by status (All / Pending / Done) via
+  `Scheduler.filter_tasks()`.
+- **Complete tasks** — mark a task done; if it's daily/weekly, the next occurrence
+  is created automatically and the app reports its date (`Task.mark_complete()`).
+- **Generate the daily schedule** — produce a sorted plan and a conflict report.
+
+### Example workflow
+
+1. Enter the owner's name (e.g. *Ada*).
+2. **Add a pet** → *Rex (dog)*; add a second → *Bella (cat)*.
+3. **Schedule tasks** → e.g. *Morning walk* for Rex at 08:00 (high priority,
+   daily), *Feed* for Bella at 08:15, and a couple of 14:00 tasks.
+4. Click **Generate schedule** → PawPal+ shows **Today's Schedule** sorted by time.
+5. Read the **conflict report** — overlapping tasks are flagged with a suggestion.
+6. Back in the task list, **mark *Morning walk* complete** → its next-day
+   occurrence appears automatically.
+
+### Key Scheduler behaviors shown
+
+- **Sorting by time** — tasks entered out of order come back in chronological
+  order, with priority breaking ties at the same time.
+- **Completion filtering** — a pre-completed task is hidden from "Today's Schedule"
+  but still visible under the "Done" filter.
+- **Conflict warnings** — same-time tasks across different pets are flagged (the
+  owner can't be in two places at once).
+- **Daily recurrence** — completing the daily walk auto-creates tomorrow's copy.
+
+### Sample CLI output (`python main.py`)
+
+The CLI runs the full scenario above and prints each stage:
+
+```
+--- Tasks as entered (out of order) ---
+[ ] 14:00 on 2026-06-28 Vet visit (for Rex) (60 min) [priority: low]
+[ ] 08:00 on 2026-06-28 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 14:00 on 2026-06-28 Play fetch (for Rex) (20 min) [priority: medium]
+[x] 07:30 on 2026-06-28 Refill water (for Rex) (5 min) [priority: high]
+[ ] 18:00 on 2026-06-28 Brush coat (for Bella) (15 min) [priority: medium]
+[ ] 08:15 on 2026-06-28 Feed (for Bella) (10 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Litter change (for Bella) (10 min) [priority: high]
+
+=== Today's Schedule for Ada ===
+[ ] 08:00 on 2026-06-28 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 08:15 on 2026-06-28 Feed (for Bella) (10 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Litter change (for Bella) (10 min) [priority: high]
+[ ] 14:00 on 2026-06-28 Play fetch (for Rex) (20 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Vet visit (for Rex) (60 min) [priority: low]
+[ ] 18:00 on 2026-06-28 Brush coat (for Bella) (15 min) [priority: medium]
+
+--- Filter: only Rex's tasks ---
+[x] 07:30 on 2026-06-28 Refill water (for Rex) (5 min) [priority: high]
+[ ] 08:00 on 2026-06-28 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 14:00 on 2026-06-28 Play fetch (for Rex) (20 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Vet visit (for Rex) (60 min) [priority: low]
+
+--- Filter: completed tasks ---
+[x] 07:30 on 2026-06-28 Refill water (for Rex) (5 min) [priority: high]
+
+--- Filter: pending tasks ---
+[ ] 08:00 on 2026-06-28 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 08:15 on 2026-06-28 Feed (for Bella) (10 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Litter change (for Bella) (10 min) [priority: high]
+[ ] 14:00 on 2026-06-28 Play fetch (for Rex) (20 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Vet visit (for Rex) (60 min) [priority: low]
+[ ] 18:00 on 2026-06-28 Brush coat (for Bella) (15 min) [priority: medium]
+
+--- Completing 'Morning walk' (daily) ---
+Auto-created next occurrence due: 2026-06-29
+Rex's tasks now (note the new pending walk for tomorrow):
+[x] 07:30 on 2026-06-28 Refill water (for Rex) (5 min) [priority: high]
+[x] 08:00 on 2026-06-28 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 08:00 on 2026-06-29 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 14:00 on 2026-06-28 Play fetch (for Rex) (20 min) [priority: medium]
+[ ] 14:00 on 2026-06-28 Vet visit (for Rex) (60 min) [priority: low]
+
+--- Conflict check ---
+WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Play fetch' (14:00).
+WARNING - conflict for Bella and Rex: 'Litter change' (14:00) overlaps 'Vet visit' (14:00).
+WARNING - conflict for Rex's schedule: 'Play fetch' (14:00) overlaps 'Vet visit' (14:00).
+```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->

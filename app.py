@@ -95,23 +95,66 @@ else:
         )
         st.success(f"Added '{task_title}' for {which_pet}.")
 
-# Show every task currently attached to the owner's pets.
+# Show the owner's tasks, sorted into the day's order and filterable.
 all_tasks = st.session_state.owner.get_all_tasks()
 if all_tasks:
-    st.write("Current tasks:")
-    st.table(
-        [
-            {
-                "pet": t.pet.name,
-                "task": t.name,
-                "start": t.start_time,
-                "duration (min)": t.duration,
-                "priority": t.priority.name.lower(),
-                "done": t.completed,
-            }
-            for t in all_tasks
-        ]
-    )
+    st.markdown("### Current Tasks")
+
+    # Filter controls -> Scheduler.filter_tasks()
+    fcol1, fcol2 = st.columns(2)
+    with fcol1:
+        pet_filter = st.selectbox("Filter by pet", ["All pets"] + [p.name for p in pets])
+    with fcol2:
+        status_filter = st.selectbox("Filter by status", ["All", "Pending", "Done"])
+
+    # Build a scheduler over the owner's tasks, sort them, then apply filters.
+    display_scheduler = Scheduler.from_owner(st.session_state.owner)
+    display_scheduler.sort_tasks()
+    completed_arg = {"All": None, "Pending": False, "Done": True}[status_filter]
+    pet_arg = None if pet_filter == "All pets" else pet_filter
+    shown = display_scheduler.filter_tasks(completed=completed_arg, pet_name=pet_arg)
+
+    if not shown:
+        st.info("No tasks match these filters.")
+    else:
+        st.table(
+            [
+                {
+                    "start": t.start_time or "--:--",
+                    "task": t.name,
+                    "pet": t.pet.name,
+                    "duration (min)": t.duration,
+                    "priority": t.priority.name.lower(),
+                    "done": "✅" if t.completed else "—",
+                }
+                for t in shown
+            ]
+        )
+
+        # Let the owner mark a pending task done. A daily/weekly task will
+        # auto-spawn its next occurrence (Task.mark_complete -> next_occurrence).
+        pending = [t for t in shown if not t.completed]
+        if pending:
+            done_choice = st.selectbox(
+                "Mark a task complete",
+                [f"{t.name} — {t.pet.name} ({t.start_time or 'unscheduled'})" for t in pending],
+            )
+            if st.button("✓ Mark complete"):
+                task = pending[
+                    [
+                        f"{t.name} — {t.pet.name} ({t.start_time or 'unscheduled'})"
+                        for t in pending
+                    ].index(done_choice)
+                ]
+                upcoming = task.mark_complete()
+                if upcoming is not None:
+                    st.success(
+                        f"Marked '{task.name}' done. Next {task.frequency} occurrence "
+                        f"scheduled for {upcoming.due_date.isoformat()}. 🔁"
+                    )
+                else:
+                    st.success(f"Marked '{task.name}' done. ✅")
+                st.rerun()
 
 # --- Build Schedule -> Scheduler.generate_plan() / detect_conflicts() -------
 st.divider()
@@ -140,8 +183,26 @@ if st.button("Generate schedule"):
 
     conflicts = scheduler.detect_conflicts()
     if conflicts:
-        st.warning("⚠️ Conflicts detected (the owner can't be in two places at once):")
+        st.error(
+            f"⚠️ {len(conflicts)} scheduling "
+            f"{'conflict' if len(conflicts) == 1 else 'conflicts'} found — "
+            "you can't be in two places at once."
+        )
         for a, b in conflicts:
-            st.write(f"- **{a.name}** ({a.start_time}) overlaps **{b.name}** ({b.start_time})")
+            same_pet = a.pet is not None and a.pet is b.pet
+            who = (
+                f"both on **{a.pet.name}**'s schedule"
+                if same_pet
+                else f"between **{a.pet.name if a.pet else '?'}** and "
+                f"**{b.pet.name if b.pet else '?'}**"
+            )
+            # Each conflict gets its own warning box: the two tasks, their times,
+            # who's affected, and a concrete next step the owner can act on.
+            st.warning(
+                f"**{a.name}** ({a.start_time}, {a.duration} min) overlaps "
+                f"**{b.name}** ({b.start_time}, {b.duration} min) — {who}.\n\n"
+                f"💡 Consider moving one of these, shortening it, or asking for help "
+                f"so they don't run at the same time."
+            )
     elif plan:
         st.success("No conflicts — the day flows cleanly. ✅")

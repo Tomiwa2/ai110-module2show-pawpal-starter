@@ -138,44 +138,229 @@ simplification for a single-day pet-care planner.
 
 ---
 
-## 3. AI Collaboration
+## 3. AI Strategy
+
+*My experience collaborating with an AI coding assistant (Claude Code) while
+building PawPal+.*
+
+**a. Which AI assistant features were most effective for building the scheduler?**
+
+The features that helped most were the ones that kept the AI grounded in *my*
+actual code rather than generic boilerplate:
+
+- **Whole-repository context.** The assistant read `pawpal_system.py`,
+  `main.py`, `app.py`, and the existing tests before changing anything, so its
+  suggestions matched my real class names and method signatures instead of
+  inventing new ones I'd have to reconcile.
+- **Running the code in the loop.** It actually ran `pytest` and `python main.py`
+  and used the genuine output. This caught a real bug the moment a generated test
+  failed (see below) and meant the sample output in my README is captured, not
+  invented.
+- **Coordinated multi-file edits.** When I added methods like `filter_tasks()`
+  and `conflict_warnings()`, the assistant updated the code, the UML diagram, and
+  the README in one pass, so the three never drifted out of sync.
+- **Tooling beyond text.** It rendered the Mermaid source to a PNG for the README
+  and exercised the scheduler end-to-end, which would have been tedious by hand.
+
+**b. One AI suggestion I rejected or modified to keep my system design clean.**
+
+Early on, the AI leaned toward an **owner-centric design** — putting the
+scheduling logic (sorting, conflict detection, plan generation) directly on the
+`Owner` class, so the owner would both hold the data *and* do the work. I
+rejected that. Folding scheduling into `Owner` would have turned it into a
+"god object" that knew about times, priorities, and conflicts on top of just
+managing pets, and it would have tangled the data model together with the
+algorithm. Instead I kept the `Scheduler` as a separate service class and gave
+`Owner` only one bridge method, `get_all_tasks()`, to hand over a flat task
+list. The data objects (`Owner`, `Pet`, `Task`) just hold state; the
+`Scheduler` is the single "brain." That separation of concerns is what lets me
+swap or extend the scheduling logic without touching the data classes.
+
+When wiring the Streamlit UI, the assistant could have reimplemented sorting and
+filtering logic directly inside `app.py`. I rejected that and insisted the UI
+stay a *thin layer* that calls the existing `Scheduler` methods
+(`sort_tasks()`, `filter_tasks()`, `detect_conflicts()`) instead of duplicating
+their logic. This kept all scheduling rules in one place (`pawpal_system.py`) so
+the UI and the CLI behave identically and there's only one place to fix a bug.
+
+A second, smaller modification: a generated test asserted
+`set(conflicts[0]) == {a, b}`. Running it failed because `Task` is an
+equality-based dataclass and therefore **unhashable**, so I rewrote the
+assertion to use membership checks. That confirmed the value of verifying every
+AI suggestion by actually running it.
+
+**c. How separate chat sessions for different phases helped us stay organized.**
+
+I used a different session for each phase — design/UML, core scheduling logic,
+the test suite, the Streamlit UI, and documentation. Keeping phases separate
+meant each conversation stayed focused on one goal, so the AI's context wasn't
+polluted by unrelated earlier discussion and its answers stayed precise. It also
+made the work easy to navigate: when I needed to revisit testing or the diagram,
+that history was self-contained rather than buried inside one giant thread.
+
+**d. What I learned about being the "lead architect" when working with powerful AI tools.**
+
+The AI is fast and genuinely capable, but the architectural decisions stayed
+mine — and they should. I set the core constraints (time as the hard constraint,
+priority only as a tie-breaker), I decided where logic belonged (in the
+`Scheduler`, not the UI), and at one point I deliberately paused the assistant
+mid-edit to have it *describe* proposed UML changes before applying them, so I
+approved each one rather than rubber-stamping a batch. My biggest takeaway is
+that the AI accelerates *execution*, but direction, naming, tradeoff judgment,
+and verification are the architect's job. Treating the AI as a fast collaborator
+I supervise — not an autopilot — is what kept the system coherent.
+
+---
+
+## 4. AI Collaboration
 
 **a. How you used AI**
 
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
 - What kinds of prompts or questions were most helpful?
 
+I used AI across every phase, but for different kinds of work:
+
+- **Design brainstorming.** Early on I used it to pressure-test my class
+  responsibilities — for example, talking through whether scheduling logic
+  belonged on `Owner` or in a separate `Scheduler`, and why a `Priority` enum was
+  safer than a plain string.
+- **Test generation.** I had it draft the `pytest` suite for the highest-risk
+  behaviors (sorting, recurrence, conflict detection) and then ran the tests to
+  confirm they actually passed.
+- **Refactoring and consistency.** When I added methods to the `Scheduler`, I used
+  AI to propagate those changes across the code, the UML diagram, and the README
+  so they stayed in sync.
+- **Debugging and documentation.** I used it to capture real CLI output, render
+  the Mermaid diagram to a PNG, and trace a confusing cross-day conflict warning
+  back to undated tasks "floating" to any day.
+
+The most helpful prompts were **specific and grounded in my actual files** —
+e.g. "what are the most important edge cases to test for a scheduler with sorting
+and recurring tasks?" or "does this UML still match the code?" — rather than
+vague "write me a scheduler" requests. Asking *why* a change was suggested, and
+asking it to explain a tradeoff before applying it, consistently produced better
+results than asking it to just make the edit.
+
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
 - How did you evaluate or verify what the AI suggested?
 
+When updating the UML diagram, the assistant was ready to apply a batch of edits
+directly. I stopped it and asked it to first *list* the proposed changes and the
+reason for each, so I could approve them one by one instead of rubber-stamping a
+diff. Two of the changes (the `Task → Task` "spawns next occurrence" arrow and
+the `Scheduler → Owner` dependency) were genuinely useful; reviewing them
+deliberately is what let me confirm they reflected real interactions in my code
+rather than noise.
+
+I verified AI output in three ways: (1) **running it** — every test suite and
+every `main.py` change was executed, which is how I caught that `Task` was an
+unhashable dataclass; (2) **reading it against the source** — I cross-checked
+suggested UML and README claims directly against `pawpal_system.py`; and
+(3) **checking behavior end-to-end** — I confirmed the generated schedule, the
+conflict warnings, and the recurrence date all matched what I expected for the
+sample scenario before trusting the output.
+
 ---
 
-## 4. Testing and Verification
+## 5. Testing and Verification
 
 **a. What you tested**
 
 - What behaviors did you test?
 - Why were these tests important?
 
+My `pytest` suite (`tests/test_pawpal.py`, 10 tests, all passing) targets the
+three highest-risk areas of the scheduler plus the core data objects:
+
+- **Sorting correctness** — timed tasks come back in chronological order, ties at
+  the same time are broken by priority (HIGH first), and unscheduled tasks sort
+  last.
+- **Recurrence logic** — completing a `daily` task spawns a pending copy dated one
+  day later and attaches it to the same pet, while a `once` task never repeats.
+- **Conflict detection** — two tasks at the *exact same time* are flagged, while
+  back-to-back tasks that only touch at the boundary are **not** flagged, and
+  completed tasks are ignored.
+- **Data objects** — adding a task to a pet increases its task count, and
+  `mark_complete()` flips a task's status.
+
+These behaviors matter because they're exactly where the scheduler is easy to get
+subtly wrong: an off-by-one in the overlap math, a string-vs-minutes sort bug, or
+a recurrence that lands on the wrong date would all produce a plausible-looking
+but incorrect plan. Testing the boundary cases (same-time vs. just-touching) pins
+down the rules precisely rather than just checking the happy path.
+
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
 - What edge cases would you test next if you had more time?
 
+I'm **moderately-to-highly confident (about 4 / 5)**. All 10 tests pass and they
+cover the riskiest logic, including the key edge cases I called out. I also ran
+`main.py` end-to-end and confirmed the sorted plan, conflict warnings, and
+recurrence date all matched what I expected for a realistic multi-pet scenario.
+
+I'm holding back the last point because several behaviors aren't directly tested
+yet. With more time I would add:
+
+- **Date-aware conflicts** — confirm a task dated *today* doesn't clash with one
+  dated *tomorrow*, and that an **undated** task correctly "floats" to any day
+  (the source of the cross-day warning I had to reason about).
+- **Filtering** — `filter_tasks()` with each `completed` value, case-insensitive
+  `pet_name`, and the two filters combined with AND.
+- **Weekly recurrence and undated recurrence** — verify the `+7 day` step and that
+  an undated recurring task anchors off today.
+- **Input validation** — empty task names and non-positive durations should raise.
+- **Multi-task conflicts** — three tasks at the same time should yield all three
+  pairwise warnings without the sweep-line early-exit dropping any.
+
 ---
 
-## 5. Reflection
+## 6. Reflection
 
 **a. What went well**
 
 - What part of this project are you most satisfied with?
 
+I'm most satisfied with the **clean separation between the data model and the
+scheduling logic**. Keeping `Owner`, `Pet`, and `Task` as plain state-holders and
+putting all the real work in the `Scheduler` made everything downstream easier:
+the CLI (`main.py`) and the Streamlit UI (`app.py`) are both thin layers over the
+same engine, the test suite can exercise the logic in isolation, and the UML
+diagram actually maps one-to-one onto the code. The conflict-detection logic is
+the piece I'm proudest of — it's date-aware, handles the exact-same-time case,
+and stays readable thanks to the sorted sweep-line early exit.
+
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
 
+A few things I'd improve with another iteration:
+
+- **De-duplicate conflict warnings.** Three tasks at the same time currently
+  produce three separate pairwise warnings; I'd group them into a single
+  "these clash" message so the owner isn't overwhelmed.
+- **Tighten the undated-task rule.** Treating an undated task as "any day" can
+  create a false-positive conflict against a dated one. I'd either default tasks
+  to today's date or make the floating behavior explicit and opt-in.
+- **Broaden test coverage.** I'd add the untested edges from Section 5 (filtering,
+  weekly/undated recurrence, date-aware conflicts, and input validation) to push
+  my confidence from 4/5 to 5/5.
+- **Support owner preferences.** The natural next constraint — preferred gaps
+  between tasks or "morning person" weighting — layered on top of the existing
+  time/priority core.
+
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+
+My biggest takeaway is that **a clear separation of responsibilities is what makes
+both the system and the AI collaboration manageable.** Because the design had
+clean seams — data objects vs. a scheduling service — I could hand the AI small,
+well-scoped tasks ("write tests for the sorter," "wire the UI to these methods")
+and verify each one independently, instead of asking it to reason about the whole
+app at once. Good architecture didn't just produce cleaner code; it made me a more
+effective *director* of the AI, because I always knew exactly where a change
+belonged and how to check that it was right.
