@@ -54,6 +54,17 @@ Paste a sample of your app's CLI or Streamlit output here so a reader can see wh
 #   ...
 ```
 
+```
+=== Today's Schedule for Ada ===
+[ ] 08:00 Morning walk (for Rex) (30 min) [priority: high]
+[ ] 08:15 Feed (for Bella) (10 min) [priority: medium]
+[ ] 14:00 Vet visit (for Rex) (60 min) [priority: low]
+[ ] 18:00 Brush coat (for Bella) (15 min) [priority: medium]
+
+!! Conflicts detected:
+   'Morning walk' (08:00) overlaps 'Feed' (08:15)
+```
+
 ## 🧪 Testing PawPal+
 
 ```bash
