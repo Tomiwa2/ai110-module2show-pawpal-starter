@@ -8,7 +8,16 @@ Design:
 """
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from enum import IntEnum
+
+# How far ahead the next occurrence of a recurring task lands. Only fixed-length
+# cycles live here: timedelta has no "months" unit because calendar months vary,
+# so "monthly"/"once" tasks are intentionally absent and never auto-repeat.
+_FREQUENCY_DELTAS = {
+    "daily": timedelta(days=1),
+    "weekly": timedelta(weeks=1),
+}
 
 
 class Priority(IntEnum):
@@ -25,6 +34,17 @@ def _to_minutes(hhmm: str) -> int:
     return int(hours) * 60 + int(minutes)
 
 
+def _same_day(a: "Task", b: "Task") -> bool:
+    """True if two tasks could land on the same day.
+
+    Both dated -> only when the dates match. If either is undated, it floats to
+    "any day" and so is allowed to clash with the other.
+    """
+    if a.due_date is None or b.due_date is None:
+        return True
+    return a.due_date == b.due_date
+
+
 @dataclass
 class Task:
     """A single pet-care activity in the daily routine."""
@@ -34,6 +54,7 @@ class Task:
     priority: Priority
     start_time: str | None = None  # "HH:MM" when the task begins (None = unscheduled)
     frequency: str = "daily"  # e.g. "daily", "weekly", "once"
+    due_date: date | None = None  # which day this occurrence is for (None = undated)
     completed: bool = False  # completion status
     # Back-reference to the owning pet. Excluded from repr/eq to avoid infinite
     # recursion (Pet -> tasks -> task -> pet -> ...).
@@ -85,9 +106,37 @@ class Task:
         if frequency is not None:
             self.frequency = frequency
 
-    def mark_complete(self) -> None:
-        """Mark this task as done."""
+    def next_occurrence(self) -> "Task | None":
+        """Build the next-cycle copy of this task, or None if it doesn't repeat.
+
+        Only "daily"/"weekly" tasks recur (see _FREQUENCY_DELTAS). The new task's
+        due_date is this occurrence's date plus one cycle; if this task is undated,
+        we anchor off today. The copy starts pending and unattached to a pet.
+        """
+        delta = _FREQUENCY_DELTAS.get(self.frequency)
+        if delta is None:
+            return None  # "once"/"monthly"/unknown -> no automatic repeat
+        base = self.due_date or date.today()
+        return Task(
+            name=self.name,
+            duration=self.duration,
+            priority=self.priority,
+            start_time=self.start_time,
+            frequency=self.frequency,
+            due_date=base + delta,
+        )
+
+    def mark_complete(self) -> "Task | None":
+        """Mark this task done; if it recurs, spawn and attach the next occurrence.
+
+        Returns the newly created next-occurrence Task (already added to the same
+        pet), or None for non-recurring tasks.
+        """
         self.completed = True
+        upcoming = self.next_occurrence()
+        if upcoming is not None and self.pet is not None:
+            self.pet.add_task(upcoming)
+        return upcoming
 
     def mark_incomplete(self) -> None:
         """Reset to not-done (e.g. for a recurring task's next cycle)."""
@@ -98,8 +147,9 @@ class Task:
         when = self.start_time if self.start_time else "--:--"
         status = "x" if self.completed else " "
         owner = f" (for {self.pet.name})" if self.pet else ""
+        day = f" on {self.due_date.isoformat()}" if self.due_date else ""
         print(
-            f"[{status}] {when} {self.name}{owner} "
+            f"[{status}] {when}{day} {self.name}{owner} "
             f"({self.duration} min) [priority: {self.priority.name.lower()}]"
         )
 
@@ -174,19 +224,76 @@ class Scheduler:
         return self.tasks_to_schedule
 
     def detect_conflicts(self) -> list[tuple[Task, Task]]:
-        """Find every pair of tasks whose scheduled times overlap.
+        """Find every pair of pending tasks whose scheduled times overlap.
 
         The owner can only do one thing at a time, so overlaps across *any*
-        pets count as a conflict.
+        pets count as a conflict. Two tasks only conflict if they fall on the
+        same day -- a task dated for tomorrow can't clash with one for today.
+        An undated task is treated as "any day" and can clash with either.
+        Completed tasks are ignored: they're already done, so they can't clash.
         """
-        timed = [t for t in self.tasks_to_schedule if t.start_minutes is not None]
+        timed = [
+            t
+            for t in self.tasks_to_schedule
+            if t.start_minutes is not None and not t.completed
+        ]
         timed.sort(key=lambda t: t.start_minutes)
         conflicts: list[tuple[Task, Task]] = []
         for i in range(len(timed)):
             for j in range(i + 1, len(timed)):
-                if timed[i].overlaps(timed[j]):
+                # Sorted by start time: once j starts at/after i ends, no later
+                # task can overlap i either, so stop scanning this row.
+                if timed[j].start_minutes >= timed[i].end_minutes:
+                    break
+                if _same_day(timed[i], timed[j]) and timed[i].overlaps(timed[j]):
                     conflicts.append((timed[i], timed[j]))
         return conflicts
+
+    def filter_tasks(
+        self,
+        completed: bool | None = None,
+        pet_name: str | None = None,
+    ) -> list[Task]:
+        """Return tasks matching the given filters, in the current order.
+
+        Both filters are optional and combine with AND:
+        - completed: keep only done (True) or pending (False) tasks; None = either.
+        - pet_name: keep only tasks belonging to this pet (case-insensitive);
+          None = any pet.
+
+        With no arguments this returns every task.
+        """
+        target_pet = pet_name.casefold() if pet_name is not None else None
+        return [
+            task
+            for task in self.tasks_to_schedule
+            if (completed is None or task.completed == completed)
+            and (
+                target_pet is None
+                or (task.pet is not None and task.pet.name.casefold() == target_pet)
+            )
+        ]
+
+    def conflict_warnings(self) -> list[str]:
+        """Return a human-readable warning for each scheduling conflict.
+
+        A "lightweight" wrapper over detect_conflicts: it never raises, it just
+        builds a friendly message per overlapping pair so the caller can print
+        them. An empty list means the day is clear.
+        """
+        warnings: list[str] = []
+        for a, b in self.detect_conflicts():
+            same_pet = a.pet is not None and a.pet is b.pet
+            who = (
+                f"{a.pet.name}'s schedule"
+                if same_pet
+                else f"{a.pet.name if a.pet else '?'} and {b.pet.name if b.pet else '?'}"
+            )
+            warnings.append(
+                f"WARNING - conflict for {who}: '{a.name}' ({a.start_time}) "
+                f"overlaps '{b.name}' ({b.start_time})."
+            )
+        return warnings
 
     def generate_plan(self) -> list[Task]:
         """Return today's routine: pending tasks, sorted into the day's order."""

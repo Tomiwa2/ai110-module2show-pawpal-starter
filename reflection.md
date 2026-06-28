@@ -71,10 +71,70 @@ with.
 - What constraints does your scheduler consider (for example: time, priority, preferences)?
 - How did you decide which constraints mattered most?
 
+My scheduler weighs four constraints, and I deliberately ranked them rather than
+treating them equally:
+
+- **Time (the hard constraint).** Each task has a `start_time` and a `duration`,
+  which I convert to minutes-since-midnight (`start_minutes`/`end_minutes`).
+  Time is the backbone of the day: `sort_tasks()` orders the routine by start
+  time, and `detect_conflicts()` uses the start/end range to flag overlaps.
+
+- **The owner's single-resource limit.** The most important *real-world*
+  constraint is that one owner can't be in two places at once, so any two timed
+  tasks whose ranges overlap — even across different pets — are a conflict. This
+  is what `detect_conflicts()` and `conflict_warnings()` exist to enforce.
+
+- **Priority (a soft tie-breaker).** Tasks carry a `Priority` enum
+  (HIGH/MEDIUM/LOW). Priority doesn't override the clock; it only breaks ties
+  when two tasks compete for the same slot or when ordering unscheduled tasks,
+  so a high-priority task surfaces first without rearranging fixed appointments.
+
+- **Recurrence and completion (what belongs in *today's* plan).** `frequency`
+  and `due_date` decide whether a task recurs and when its next occurrence
+  lands, and `generate_plan()` drops completed tasks so the routine only shows
+  what still needs doing.
+
+I decided time mattered most because a daily routine is fundamentally a
+timeline: if the clock is wrong, nothing else helps. Priority comes second as a
+*tie-breaker* rather than a primary sort, because reordering a fixed 14:00 vet
+visit ahead of an 08:00 walk just because it's "higher priority" would produce
+an impossible schedule. Preferences (e.g. "morning person," preferred gaps
+between tasks) were intentionally left out of scope for this version — they'd be
+the natural next constraint to add, layered on top of the time/priority core.
+
 **b. Tradeoffs**
 
 - Describe one tradeoff your scheduler makes.
 - Why is that tradeoff reasonable for this scenario?
+
+One clear tradeoff is in how `Scheduler.detect_conflicts()` finds overlapping
+tasks: it compares tasks **pairwise** (an O(n²) "check every pair" approach)
+rather than using a faster data structure like an interval tree. I kept the
+pairwise approach, but added two refinements to keep it honest:
+
+- I sort the timed tasks by start time first, then **break out of the inner
+  loop** as soon as a later task starts after the current one ends — since the
+  list is sorted, nothing after it can overlap either. This keeps the common
+  case closer to linear without changing the simple structure.
+- A side effect of reporting *every* overlapping pair is redundancy: if three
+  tasks all sit at 14:00, the owner sees three separate warnings (A–B, A–C,
+  B–C) instead of one grouped "these three clash" message.
+
+This tradeoff is reasonable here because a pet owner realistically has only a
+handful of tasks per day, so the n² cost is negligible and the redundant
+warnings are still readable. The simple, explicit loop is far easier to
+understand and verify than a balanced interval tree would be, and the
+readability matters more than raw speed at this scale. If the app ever scaled
+to many pets with recurrence expanded across weeks, an interval-based approach
+and de-duplicated warnings would become worth the added complexity.
+
+A related, deliberate choice: conflict detection works on **wall-clock minutes
+within a day** plus a same-day date check, rather than full datetime ranges. It
+correctly catches overlapping *durations* (not just exact start-time matches —
+an 08:00 30-minute walk conflicts with an 08:15 feed), but it assumes every
+task fits inside a single day and treats an undated task as "any day," which can
+produce a false-positive conflict against a dated one. That's an acceptable
+simplification for a single-day pet-care planner.
 
 ---
 
